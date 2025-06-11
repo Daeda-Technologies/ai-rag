@@ -1,0 +1,75 @@
+name: Deploy RAG Infra
+
+on:
+  workflow_dispatch:
+    inputs:
+      aws_access_key_id:
+        description: 'AWS Access Key ID'
+        required: true
+      aws_secret_access_key:
+        description: 'AWS Secret Access Key'
+        required: true
+      domain_name:
+        description: 'Domain name to purchase'
+        required: true
+      client_name:
+        description: 'Client name (used for pathing in backend state)'
+        required: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up AWS credentials
+        env:
+          AWS_ACCESS_KEY_ID: ${{ github.event.inputs.aws_access_key_id }}
+          AWS_SECRET_ACCESS_KEY: ${{ github.event.inputs.aws_secret_access_key }}
+        run: |
+          echo "AWS credentials configured"
+
+      - name: Configure AWS CLI
+        run: |
+          aws configure set aws_access_key_id "${{ github.event.inputs.aws_access_key_id }}"
+          aws configure set aws_secret_access_key "${{ github.event.inputs.aws_secret_access_key }}"
+          aws configure set default.region us-east-2
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y unzip
+          curl -o terraform.zip https://releases.hashicorp.com/terraform/1.5.7/terraform_1.5.7_linux_amd64.zip
+          unzip terraform.zip
+          sudo mv terraform /usr/local/bin/
+
+      - name: Buy domain
+        run: |
+          chmod +x buy-domain.sh
+          ./buy-domain.sh "${{ github.event.inputs.domain_name }}"
+
+      - name: Upload model to S3
+        run: |
+          aws s3 cp model/model.tar.gz s3://my-llm-inference-bucket/model.tar.gz
+
+      - name: Push Docker image to ECR
+        run: |
+          aws ecr get-login-password --region us-west-2 | docker login --username AWS --password-stdin 763104351884.dkr.ecr.us-west-2.amazonaws.com
+          docker build -t huggingface-pytorch-inference:latest .
+          docker tag huggingface-pytorch-inference:latest 763104351884.dkr.ecr.us-west-2.amazonaws.com/huggingface-pytorch-inference:latest
+          docker push 763104351884.dkr.ecr.us-west-2.amazonaws.com/huggingface-pytorch-inference:latest
+
+      - name: Initialize Terraform with remote backend
+        run: |
+          terraform init \
+            -backend-config="bucket=daeda-terraform-state" \
+            -backend-config="key=${{ github.event.inputs.client_name }}/infra/terraform.tfstate" \
+            -backend-config="region=us-west-2" \
+            -backend-config="encrypt=true"
+
+      - name: Apply Terraform
+        run: |
+          terraform apply -auto-approve \
+            -var="domain_name=${{ github.event.inputs.domain_name }}" \
+            -var="client_name=${{ github.event.inputs.client_name }}"

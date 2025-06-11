@@ -1,0 +1,36 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: llm-inference-client
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: llm-inference-client
+  template:
+    metadata:
+      labels:
+        app: llm-inference-client
+    spec:
+      containers:
+      - name: llm-inference-client
+        image: <your-ecr-repo-uri>:latest
+        ports:
+        - containerPort: 8080
+        env:
+        - name: SAGEMAKER_ENDPOINT
+          value: "your-sagemaker-endpoint-name"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: llm-inference-client-service
+spec:
+  selector:
+    app: llm-inference-client
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 8080
+  type: LoadBalancer
+
